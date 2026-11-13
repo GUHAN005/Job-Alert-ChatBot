@@ -1,0 +1,17 @@
+.env
+.env.local
+.env.*.local
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# State files & logs
+.bot_offset
+.bot_rate_limit.json
+*.log
+
+# Editor configs
+.vscode/
+.idea/
