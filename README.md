@@ -104,28 +104,12 @@ Leave this terminal window open. You can now send messages to your bot on Telegr
 To receive on-demand replies at any time without keeping your personal computer turned on, deploy `bot.py` using either Render or Railway.
 
 ### Method A: Deploy Free on Render (Recommended)
-1. Push this repository to GitHub:
-   ```bash
-   git add .
-   git commit -m "Initial commit of walkin-job-alert-agent"
-   git push origin main
-   ```
-2. Go to [render.com](https://render.com) and sign in with your GitHub account.
-3. In the Render Dashboard, click **New +** → **Background Worker** (or **Web Service**).
-4. Select your `walkin-job-alert-agent` repository.
-5. Fill in the service details:
-   - **Name**: `walkin-job-alert-bot`
-   - **Region**: Choose closest to you (e.g., Singapore or Frankfurt)
-   - **Branch**: `main`
-   - **Runtime**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python bot.py`
-6. Scroll down to **Environment Variables** and add the following 3 variables:
-   - `ANTHROPIC_API_KEY`: Your Anthropic API Key
-   - `TELEGRAM_BOT_TOKEN`: Your Telegram Bot Token
-   - `TELEGRAM_CHAT_ID`: Your Personal Chat ID
-7. Click **Create Background Worker**.
-8. Render will build and run `python bot.py` continuously 24/7.
+1. Go to [render.com](https://render.com) and sign in with your GitHub account.
+2. Click **New +** → **Blueprint** and select this repository. Render will use the included `render.yaml` to create a Background Worker that runs `python bot.py`.
+3. Enter the values for `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` when prompted. Enter `ANTHROPIC_API_KEY` as well to enable live job searches.
+4. Create the Blueprint. Render will install `requirements.txt` and keep the bot worker running.
+
+This bot uses Telegram long polling and must run as a persistent background worker. It is not compatible with Vercel's serverless Python functions; deploying this repository on Vercel will fail because it has no serverless Python entry point.
 
 ---
 
