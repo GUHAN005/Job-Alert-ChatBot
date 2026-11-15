@@ -10,6 +10,7 @@ __pycache__/
 # State files & logs
 .bot_offset
 .bot_rate_limit.json
+.bot_last_daily_sent.txt
 *.log
 
 # Editor configs

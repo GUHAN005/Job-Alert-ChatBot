@@ -16,11 +16,13 @@ Key Features:
 """
 
 import os
+import re
 import sys
 import time
 import json
 import logging
 import argparse
+import threading
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -34,7 +36,8 @@ from job_search import (
     search_jobs,
     format_for_telegram,
     split_message_chunks,
-    get_ist_dates
+    get_ist_dates,
+    has_anthropic_key
 )
 
 # Configure logger (ensuring no tokens or keys are printed)
@@ -47,6 +50,7 @@ logger = logging.getLogger("telegram_bot")
 
 OFFSET_FILE = ".bot_offset"
 RATE_LIMIT_FILE = ".bot_rate_limit.json"
+DAILY_SENT_FILE = ".bot_last_daily_sent.txt"
 CACHE_EXPIRY_SECONDS = 1800  # 30 minutes
 MAX_DAILY_SEARCHES = 20
 
@@ -108,6 +112,76 @@ class InteractiveJobBot:
                 json.dump(self.daily_usage, f)
         except Exception as e:
             logger.warning(f"Could not save rate limit file: {e}")
+
+    def _load_last_daily_sent(self) -> Optional[str]:
+        """Loads the date string of the last delivered daily digest."""
+        if os.path.exists(DAILY_SENT_FILE):
+            try:
+                with open(DAILY_SENT_FILE, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception as e:
+                logger.warning(f"Could not read daily sent file: {e}")
+        return None
+
+    def _save_last_daily_sent(self, date_str: str) -> None:
+        """Persists date string of delivered daily digest to prevent duplicate alerts."""
+        try:
+            with open(DAILY_SENT_FILE, "w", encoding="utf-8") as f:
+                f.write(date_str.strip())
+        except Exception as e:
+            logger.warning(f"Could not write daily sent file: {e}")
+
+    def send_daily_digest(self, is_automatic: bool = False) -> bool:
+        """Compiles and sends daily digest with at least 10 IT & CSE opportunities."""
+        today_str, _, _ = get_ist_dates()
+        try:
+            logger.info("Compiling daily digest with 10+ IT & CSE opportunities...")
+            raw_result = search_jobs(city=None, kind=None, query=None, dry_run=False)
+            has_key = has_anthropic_key()
+
+            demo_banner = ""
+            if not has_key:
+                demo_banner = (
+                    "💡 *[DEMO / SAMPLE LISTINGS]*\n"
+                    "_Live search requires an `ANTHROPIC_API_KEY` in `.env`. "
+                    "Showing 10+ verified opportunities for preview:_\n\n"
+                )
+
+            tag = "⏰ *[DAILY 8:00 AM AUTOMATED DIGEST]*\n" if is_automatic else "🚀 *[DAILY JOB DIGEST — ON DEMAND]*\n"
+            header = (
+                f"{tag}"
+                f"📅 *Date Window:* {today_str} (Next 5 Days — Advance Travel Notice)\n"
+                "📍 *Locations:* Chennai, Coimbatore, Bangalore + Online\n"
+                "🎯 *Prioritized Roles:* Software Developer, Java, MERN/Full Stack, Web, AI/ML, Data Analyst, QA/Testing, IT Support\n\n"
+            )
+
+            full_msg = demo_banner + header + format_for_telegram(raw_result)
+            return self.send_message(self.allowed_chat_id, full_msg)
+        except Exception as e:
+            logger.error(f"Error compiling/sending daily digest: {e}", exc_info=True)
+            return False
+
+    def _daily_scheduler_loop(self) -> None:
+        """Background thread checking for 8:00 AM IST daily reminder."""
+        logger.info("Daily 8:00 AM IST reminder scheduler initialized and running.")
+        while True:
+            try:
+                now_ist = datetime.now(IST)
+                today_str = now_ist.strftime("%Y-%m-%d")
+                last_sent = self._load_last_daily_sent()
+
+                # Trigger at 8:00 AM IST (or catch up during morning until 12:00 PM if bot was offline at 8 AM)
+                if now_ist.hour >= 8 and now_ist.hour < 12 and last_sent != today_str:
+                    logger.info("⏰ Sending scheduled morning daily job digest...")
+                    sent = self.send_daily_digest(is_automatic=True)
+                    if sent:
+                        self._save_last_daily_sent(today_str)
+                        logger.info(f"Daily morning digest sent successfully for {today_str}.")
+
+                time.sleep(30)
+            except Exception as e:
+                logger.error(f"Error in daily scheduler loop: {e}")
+                time.sleep(60)
 
     def can_search_today(self) -> Tuple[bool, int]:
         """Verifies if the user is within the daily rate limit of 20 searches."""
@@ -191,6 +265,15 @@ class InteractiveJobBot:
                 data = resp.json()
                 if data.get("ok"):
                     return data.get("result", [])
+            elif resp.status_code == 401:
+                logger.error("Telegram says 401 Unauthorized: bot token in .env is wrong or revoked.")
+                sys.exit(1)
+            elif resp.status_code == 409:
+                logger.error("409 Conflict: another bot.py is running. Close other terminals.")
+                time.sleep(10)
+            else:
+                logger.warning(f"getUpdates returned HTTP {resp.status_code}")
+                time.sleep(5)
         except requests.exceptions.Timeout:
             # Expected during long polling when no new messages exist
             return []
@@ -219,16 +302,36 @@ class InteractiveJobBot:
 
         logger.info(f"Processing authorized message: '{text}'")
 
-        # 2. COMMAND HANDLING
-        cmd = text.split()[0].lower() if text.startswith("/") else ""
+        # 2. GREETINGS & HELP COMMANDS
+        text_clean = text.strip()
+        text_lower = text_clean.lower()
+        greetings = [
+            "hi", "hii", "hiii", "hello", "hey", "heyy", "hola", "buddy",
+            "hi buddy", "hey buddy", "hello buddy", "good morning",
+            "good afternoon", "good evening", "/start", "/help", "help", "start"
+        ]
+        is_greeting = text_lower in greetings or bool(re.match(r'^(h+i+|h+e+y+|hello+|buddy)\b', text_lower))
 
-        if cmd in ["/start", "/help"]:
+        if is_greeting:
             welcome_text = (
                 f"👋 *Hello {first_name}! Welcome to Walk-in Job Alert Agent.*\n\n"
-                "I scan live opportunities for *final-year B.Tech AI & Data Science* "
-                "freshers happening today or in the next 2 days across Chennai, Coimbatore, and Bangalore.\n\n"
+                "I scan upcoming job opportunities for *IT & CSE cluster* tech freshers "
+                "scheduled strictly within the next 5 days across Chennai, Coimbatore, and Bangalore, "
+                "giving you up to 5 days advance notice so you can reach the company directly!\n\n"
+                "⏰ *Daily Reminder:* Every morning at *8:00 AM IST*, you will automatically receive "
+                "the Daily Digest with at least 10 verified opportunities!\n\n"
+                "🎯 *Prioritized Roles:*\n"
+                "• Software Developer / Software Engineer\n"
+                "• Java Developer\n"
+                "• Full Stack / MERN Developer\n"
+                "• Web Developer\n"
+                "• AI / ML Engineer\n"
+                "• Data Analyst / Data Engineer\n"
+                "• QA / Testing Engineer\n"
+                "• IT Support / Systems Engineer\n\n"
                 "📌 *Available Commands:*\n"
-                "• /today — All walk-ins & online tests for today and next 2 days\n"
+                "• /daily — Trigger the 8:00 AM Daily Digest on-demand (10+ jobs)\n"
+                "• /today — All walk-ins & online tests for the upcoming 5 days\n"
                 "• /chennai — Openings in Chennai only\n"
                 "• /coimbatore — Openings in Coimbatore only\n"
                 "• /bangalore — Openings in Bangalore only\n"
@@ -236,32 +339,70 @@ class InteractiveJobBot:
                 "• /walkin — In-person walk-in interviews only\n"
                 "• /help — Show this help message\n\n"
                 "🔍 *Custom Query:*\n"
-                "Send any regular text (e.g. _\"AI jobs in Chennai tomorrow\"_, _\"Data analyst walkin Bangalore\"_) "
+                "Send any regular text (e.g. _\"Java developer walkin Chennai tomorrow\"_, _\"Data analyst walkin Bangalore\"_) "
                 "to execute a real-time web search."
             )
             self.send_message(chat_id, welcome_text)
             return
 
-        # Map commands to search criteria
+        # Direct /daily command handling
+        if text_lower in ["/daily", "daily", "/digest", "digest", "daily digest"]:
+            self.send_message(chat_id, "⏳ *Compiling your Daily Job Digest (10+ IT & CSE opportunities)...*")
+            self.send_daily_digest(is_automatic=False)
+            return
+
+        # Direct /companies or /careers command handling
+        if text_lower in ["/companies", "companies", "/careers", "careers", "/portals", "portals"]:
+            companies_msg = (
+                "🌐 *OFFICIAL COMPANY CAREER WEBSITES (IT & CSE)*\n"
+                "════════════════════════════════\n\n"
+                "Scan and apply directly on verified enterprise career portals:\n\n"
+                "🏢 *Top Tech Enterprise Portals:*\n"
+                "• *Zoho Careers:* https://www.zoho.com/careers/\n"
+                "• *Cognizant Careers:* https://careers.cognizant.com/global/en\n"
+                "• *TCS iON NQT Hub:* https://www.tcsion.com/hub/national-qualifier-test/\n"
+                "• *Infosys Careers:* https://career.infosys.com/\n"
+                "• *Wipro Careers:* https://careers.wipro.com/careers-home/jobs\n"
+                "• *HCLTech Careers:* https://www.hcltech.com/careers\n"
+                "• *Bosch India:* https://www.bosch.in/careers/\n"
+                "• *Tech Mahindra:* https://careers.techmahindra.com/\n"
+                "• *Accenture India Careers:* https://www.accenture.com/in-en/careers/jobsearch?jk=Associate%20Software%20Engineer\n"
+                "• *Capgemini Careers:* https://www.capgemini.com/in-en/careers/job-search/\n"
+                "• *LTIMindtree:* https://www.ltimindtree.com/careers/\n"
+                "• *Hexaware:* https://hexaware.com/careers/\n"
+                "• *KGISL Technologies:* https://www.kgisl.com/careers/\n\n"
+                "💡 *Tip:* Bookmark these links to check fresh walk-in drives and off-campus test openings directly!"
+            )
+            self.send_message(chat_id, companies_msg)
+            return
+
+        # Map commands to search criteria (supports both with or without '/')
+        cmd = text_clean.split()[0].lower() if text_clean.startswith("/") else ""
         city = None
         kind = None
         query = None
 
-        if cmd == "/today":
+        if cmd == "/today" or text_lower in ["today", "/today"]:
+            cmd = "/today"
             city = None
             kind = None
-        elif cmd == "/chennai":
+        elif cmd == "/chennai" or text_lower in ["chennai", "/chennai"]:
+            cmd = "/chennai"
             city = "chennai"
-        elif cmd == "/coimbatore":
+        elif cmd == "/coimbatore" or text_lower in ["coimbatore", "/coimbatore"]:
+            cmd = "/coimbatore"
             city = "coimbatore"
-        elif cmd == "/bangalore":
+        elif cmd == "/bangalore" or text_lower in ["bangalore", "bengaluru", "/bangalore", "/bengaluru"]:
+            cmd = "/bangalore"
             city = "bangalore"
-        elif cmd == "/online":
+        elif cmd == "/online" or text_lower in ["online", "/online"]:
+            cmd = "/online"
             kind = "online"
-        elif cmd == "/walkin":
+        elif cmd == "/walkin" or text_lower in ["walkin", "walk-in", "/walkin", "/walk-in"]:
+            cmd = "/walkin"
             kind = "walkin"
         else:
-            query = text
+            query = text_clean
 
         cache_key = (cmd if cmd else query.strip().lower())
 
@@ -290,12 +431,20 @@ class InteractiveJobBot:
             self.send_message(chat_id, limit_msg)
             return
 
-        # 5. IMMEDIATE "Searching... please wait" NOTICE
-        self.send_message(
-            chat_id,
-            "🔍 *Searching for fresh opportunities...*\n"
-            "Please wait, scanning verified portals and company pages (takes 30-90 seconds) ⏳"
-        )
+        # 5. IMMEDIATE NOTIFICATION
+        has_key = has_anthropic_key()
+        if has_key:
+            self.send_message(
+                chat_id,
+                "🔍 *Searching for fresh opportunities...*\n"
+                "Please wait, scanning verified portals and company pages (takes 30-90 seconds) ⏳"
+            )
+        else:
+            self.send_message(
+                chat_id,
+                "🔍 *Fetching job opportunities...*\n"
+                "_(Using sample database — add `ANTHROPIC_API_KEY` to `.env` for real-time web search)_"
+            )
 
         # 6. EXECUTE SEARCH WITH TRY/EXCEPT
         try:
@@ -312,9 +461,17 @@ class InteractiveJobBot:
                     f"City: {city.capitalize()}" if city else
                     f"Category: {'Walk-ins Only' if kind == 'walkin' else 'Online Only' if kind == 'online' else 'All Openings'}"
                 )
+                demo_banner = ""
+                if not has_key:
+                    demo_banner = (
+                        "💡 *[DEMO / SAMPLE LISTINGS]*\n"
+                        "_Live search is offline because `ANTHROPIC_API_KEY` is not set in `.env`._\n\n"
+                    )
+
                 formatted_message = (
+                    demo_banner +
                     f"🚀 *JOB ALERTS — {scope_title.upper()}*\n"
-                    f"📅 *Window:* Today & Next 2 Days\n\n"
+                    f"📅 *Window:* Upcoming (Next 5 Days — Advance Notice to Reach Directly)\n\n"
                     + format_for_telegram(raw_result)
                 )
 
@@ -333,17 +490,42 @@ class InteractiveJobBot:
 
         except Exception as e:
             logger.error(f"Error handling user request: {e}", exc_info=True)
-            self.send_message(
-                chat_id,
-                "⚠️ *Temporary Error:* Could not complete the job search at this time. "
-                "Please try again in a few minutes."
-            )
+            err_msg = str(e)
+            if "credit balance" in err_msg.lower() or "billing" in err_msg.lower():
+                user_msg = (
+                    "⚠️ *Anthropic Account Notice*\n\n"
+                    "Your Anthropic Claude API account has run out of credits or requires billing setup.\n"
+                    "Please check your balance at [console.anthropic.com](https://console.anthropic.com/)."
+                )
+            elif "authentication" in err_msg.lower() or "401" in err_msg or "invalid_api_key" in err_msg:
+                user_msg = (
+                    "⚠️ *Anthropic Authentication Error*\n\n"
+                    "The `ANTHROPIC_API_KEY` in `.env` is invalid or expired. "
+                    "Please verify your key in `.env`."
+                )
+            else:
+                user_msg = (
+                    f"⚠️ *Search Notice*\n\n"
+                    f"Could not complete the search: {err_msg}\n\n"
+                    f"Please check your `.env` configuration or try again in a few minutes."
+                )
+            self.send_message(chat_id, user_msg)
 
     def run(self) -> None:
-        """Starts the Telegram bot polling loop."""
+        """Starts the Telegram bot polling loop and 8:00 AM daily reminder."""
         logger.info("Initializing Walk-in Job Alert Bot...")
         # Clear any dangling webhook first
         self.delete_webhook_if_set()
+
+        # Start background daily reminder thread
+        scheduler_thread = threading.Thread(
+            target=self._daily_scheduler_loop,
+            daemon=True,
+            name="DailyReminderScheduler"
+        )
+        scheduler_thread.start()
+        logger.info("Automated 8:00 AM IST daily reminder thread started.")
+
         logger.info(f"Starting long polling (only responding to chat_id={self.allowed_chat_id})...")
 
         while True:

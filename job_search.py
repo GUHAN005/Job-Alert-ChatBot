@@ -33,8 +33,14 @@ if not logger.handlers:
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def has_anthropic_key() -> bool:
+    """Checks whether a valid Anthropic API key is configured in .env."""
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    return bool(key and not key.startswith("your_") and key != "test_key")
+
+
 def get_ist_dates() -> Tuple[str, str, str]:
-    """Returns today's date, tomorrow, and today+2 days in IST."""
+    """Returns today's date, tomorrow, and today+2 days in IST for legacy compatibility."""
     now_ist = datetime.now(IST)
     today_str = now_ist.strftime("%A, %d %B %Y")
     day1_str = (now_ist + timedelta(days=1)).strftime("%A, %d %B %Y")
@@ -42,28 +48,70 @@ def get_ist_dates() -> Tuple[str, str, str]:
     return today_str, day1_str, day2_str
 
 
-def build_system_prompt() -> str:
-    """Builds the comprehensive system prompt with current IST dates injected."""
-    today_str, day1_str, day2_str = get_ist_dates()
-    window_str = f"{today_str}, {day1_str}, and {day2_str}"
+def get_ist_date_window(days: int = 5) -> Dict[str, str]:
+    """Returns formatted dates for today and the next N days (up to 5 days ahead) in IST."""
+    now_ist = datetime.now(IST)
+    d = {}
+    for i in range(days + 1):
+        d[f"day{i}"] = (now_ist + timedelta(days=i)).strftime("%A, %d %B %Y")
+    d["today"] = d["day0"]
+    d["start_date"] = d["day0"]
+    d["end_date"] = d[f"day{days}"]
+    d["window_str"] = f"{d['day0']} to {d[f'day{days}']}"
+    return d
 
-    return f"""You are a specialized Job Search AI Assistant for a final-year B.Tech Artificial Intelligence & Data Science fresher seeking immediate employment.
+
+def build_system_prompt() -> str:
+    """Builds the comprehensive system prompt with up to 5 days advance notice window in IST."""
+    dw = get_ist_date_window(days=5)
+    today_str = dw["today"]
+    window_str = dw["window_str"]
+
+    return f"""You are a specialized Job Search AI Assistant prioritizing IT & CSE cluster jobs for final-year engineering students and tech freshers (0-1 year experience).
 
 CURRENT DATE (IST): {today_str}
-TARGET DATES WINDOW: Only include opportunities happening strictly within the next 2 days ({window_str}) so the candidate can prepare and reach the venue 1-2 days ahead.
-TARGET LOCATIONS: Chennai, Coimbatore, and Bangalore.
+ADVANCE NOTICE WINDOW (UP TO 5 DAYS AHEAD): Only include opportunities scheduled strictly within the next 5 days ({window_str}) so the candidate receives updates up to 5 days in advance to plan travel, book transit, and reach the company venue in Chennai, Coimbatore, or Bangalore directly.
+TARGET LOCATIONS: Chennai, Coimbatore, and Bangalore (plus pan-India Online Assessments).
 
 MANDATORY RULES:
-1. TARGET AUDIENCE:
-   - Final-year B.Tech (AI & Data Science, CSE, IT, ECE) freshers and 0-1 year entry-level roles.
-   - Roles include: Software Engineer, AI/ML Engineer, Data Analyst, Associate Software Engineer, Python Developer, Graduate Engineer Trainee (GET), Technical Support, IT Trainee.
-2. VERIFIED SOURCES:
-   - Use official company career portals, Naukri, LinkedIn, Indeed, Foundit.
-   - Never invent or fabricate details; if any field is not stated in the source, write "Not mentioned".
-   - SKIP ANY SCAM: Ignore any posting that requires registration fees, security deposits, or training fees.
-3. OUTPUT STRUCTURE:
-   You must produce two clear sections followed by a top priority list:
+1. TARGET AUDIENCE & IT/CSE CLUSTER PRIORITY:
+   Prioritize IT & CSE cluster jobs only. Preferred roles:
+   - Software Developer / Software Engineer
+   - Java Developer
+   - Full Stack / MERN Developer
+   - Web Developer
+   - AI / ML Engineer
+   - Data Analyst / Data Engineer
+   - QA / Testing Engineer
+   - IT Support / Systems Engineer
 
+2. MINIMUM 10 JOBS REQUIREMENT:
+   Provide AT LEAST 10 verified job opportunities in every comprehensive search / daily digest:
+   - At least 7-8 in-person Walk-in drives distributed across Chennai, Coimbatore, and Bangalore scheduled over the next 5 days.
+   - At least 3-4 Online Assessments or Virtual Coding Interviews.
+
+3. ADVANCE NOTICE SCHEDULING (UP TO 5 DAYS AHEAD):
+   Every opportunity must be scheduled within the 5-day window so the candidate can prepare and reach the venue directly. Clearly display the interview date and reporting time for each walk-in.
+
+4. DIRECT SCANNING OF ALL OFFICIAL COMPANY CAREER WEBSITES:
+   - You MUST prioritize direct searches across official company career websites:
+     * Zoho Careers (https://www.zoho.com/careers/)
+     * Cognizant Careers (https://careers.cognizant.com/global/en)
+     * TCS Careers & iON Hub (https://www.tcs.com/careers, https://www.tcsion.com/hub/national-qualifier-test/)
+     * Infosys Careers (https://career.infosys.com/)
+     * Wipro Careers (https://careers.wipro.com/careers-home/jobs)
+     * HCLTech Careers (https://www.hcltech.com/careers)
+     * Bosch India Careers (https://www.bosch.in/careers/)
+     * Tech Mahindra Careers (https://careers.techmahindra.com/)
+     * Accenture India (https://www.accenture.com/in-en/careers/jobsearch?jk=Associate%20Software%20Engineer)
+     * Capgemini Careers (https://www.capgemini.com/in-en/careers/job-search/)
+     * LTIMindtree, Hexaware, KGISL, Virtusa, and product companies in Chennai, Coimbatore, Bangalore.
+   - Registration links and source links MUST lead directly to the company's official career portal or active registration form.
+   - NEVER output broken/guessed subdomains (always use verified live domains).
+   - All Google Maps links MUST use universal format: https://www.google.com/maps/search/?api=1&query=<Company+and+Venue+Name>
+   - SKIP ANY SCAM: Ignore any posting that requires registration fees, security deposits, or training fees.
+
+5. OUTPUT STRUCTURE:
    SECTION 1: Walk-in Interviews (Grouped by City: Chennai, Coimbatore, Bangalore)
    Provide each walk-in with:
    Company | Date | Role | Eligibility | Salary | Venue (full address) | Google Maps link | Reporting time | Source link
@@ -73,7 +121,7 @@ MANDATORY RULES:
    Company | Role | Eligibility | Platform | Last date to apply | Test/Interview date & time | Test pattern | Salary | Registration link | Source link
 
    SECTION 3: Priority List
-   End with a "Priority list" highlighting the TOP 3 opportunities to act on first and the specific reason why (e.g. immediate deadline, top tier brand, direct technical alignment with AI/Data Science).
+   End with a "Priority list" highlighting the TOP 3 opportunities to act on first with specific reasoning (deadline urgency, top tier brand, technical role match).
 """
 
 
@@ -82,56 +130,73 @@ def get_mock_results(
     kind: Optional[str] = None,
     query: Optional[str] = None
 ) -> str:
-    """Returns realistic, high-quality mock markdown tables for dry-run and offline tests."""
-    today_str, day1_str, day2_str = get_ist_dates()
+    """Returns realistic, high-quality mock markdown tables for dry-run and offline tests (10+ IT & CSE jobs, 5-day advance window)."""
+    dw = get_ist_date_window(days=5)
+    today_str = dw["day0"]
+    day1_str = dw["day1"]
+    day2_str = dw["day2"]
+    day3_str = dw["day3"]
+    day4_str = dw["day4"]
+    day5_str = dw["day5"]
 
-    mock_text = f"""## Walk-in Interviews
-
-### Chennai
+    chennai_table = f"""### Chennai
 | Company | Date | Role | Eligibility | Salary | Venue | Google Maps link | Reporting time | Source link |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Cognizant Technology Solutions | {day1_str} | Programmer Analyst Trainee (AI & Data Track) | B.Tech (AI&DS, CSE, IT) 2024/2025/2026 Batch, Min 60% with no standing arrears | ₹4.5 - ₹5.5 LPA | Cognizant TCO Campus, OMR, Sholinganallur, Chennai - 600119 | https://maps.google.com/?q=Cognizant+Sholinganallur+OMR+Chennai | 09:00 AM IST | https://careers.cognizant.com |
-| Zoho Corporation | {day2_str} | Associate Software Developer / AI Operations | B.E / B.Tech / MCA (Any Batch), Hands-on Java, Python, C++, SQL | ₹5.0 - ₹8.0 LPA | Zoho Corporation, Estancia IT Park, Vallancheri, GST Road, Chennai - 603202 | https://maps.google.com/?q=Zoho+Estancia+Guduvanchery | 08:30 AM IST | https://www.zoho.com/careers/ |
+| Cognizant Technology Solutions | {day2_str} (in 2 days) | Programmer Analyst Trainee (Java / Full Stack Track) | B.Tech / B.E (CSE, IT, AI&DS) 2024/2025/2026 Batch, Min 60% with no standing arrears | ₹4.5 - ₹5.5 LPA | Cognizant TCO Campus, OMR, Sholinganallur, Chennai - 600119 | https://www.google.com/maps/search/?api=1&query=Cognizant+Technology+Solutions+Sholinganallur+Chennai | 09:00 AM IST | https://careers.cognizant.com/global/en |
+| HCLTech | {day3_str} (in 3 days) | Associate Engineer (QA & Automation Testing) | B.Tech (CSE, IT, ECE, AI&DS), Basic Selenium, Core Java, Python | ₹4.0 - ₹5.0 LPA | HCLTech ELCOT SEZ, Sholinganallur Medavakkam High Road, Chennai - 600119 | https://www.google.com/maps/search/?api=1&query=HCLTech+ELCOT+SEZ+Sholinganallur+Chennai | 09:30 AM IST | https://www.hcltech.com/careers |
+| Zoho Corporation | {day4_str} (in 4 days) | Software Developer / Web & Java Developer | B.E / B.Tech / MCA (Any Tech Batch), Hands-on Java, Python, C++, SQL | ₹5.0 - ₹8.5 LPA | Zoho Corporation, Estancia IT Park, Vallancheri, GST Road, Chennai - 603202 | https://www.google.com/maps/search/?api=1&query=Zoho+Corporation+Estancia+Vallancheri+Guduvanchery+Chennai | 08:30 AM IST | https://www.zoho.com/careers/ |"""
 
-### Coimbatore
+    coimbatore_table = f"""### Coimbatore
 | Company | Date | Role | Eligibility | Salary | Venue | Google Maps link | Reporting time | Source link |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Bosch Global Software Technologies | {day1_str} | Associate AI & Embedded Engineer | B.Tech (AI&DS, ECE, CSE), 2024/2025, Strong C/C++, Python & ML basics | ₹4.8 - ₹6.2 LPA | Bosch GSRC, CHIL SEZ, Keeranatham Road, Saravanampatti, Coimbatore - 641035 | https://maps.google.com/?q=Bosch+Saravanampatti+Coimbatore | 09:30 AM IST | https://www.bosch.in/careers/ |
+| KGISL Technologies | {day2_str} (in 2 days) | Web Developer / Full Stack MERN Trainee | B.Tech / B.Sc CS / BCA / MCA (2024-2026), React.js, Node.js, JavaScript | ₹3.6 - ₹4.5 LPA | KGISL Campus, CHIL SEZ, Keeranatham, Coimbatore - 641035 | https://www.google.com/maps/search/?api=1&query=KGISL+Campus+Keeranatham+Saravanampatti+Coimbatore | 10:00 AM IST | https://www.kgisl.com/careers/ |
+| Bosch Global Software Technologies | {day3_str} (in 3 days) | Associate AI / ML & Embedded Engineer | B.Tech (AI&DS, CSE, ECE), 2024/2025/2026, Strong Python, ML, C/C++ basics | ₹4.8 - ₹6.5 LPA | Bosch GSRC, CHIL SEZ, Keeranatham Road, Saravanampatti, Coimbatore - 641035 | https://www.google.com/maps/search/?api=1&query=Bosch+Global+Software+CHIL+SEZ+Saravanampatti+Coimbatore | 09:30 AM IST | https://www.bosch.in/careers/ |
+| Cognizant Technology Solutions | {day5_str} (in 5 days) | Junior Data Analyst / Data Engineer Trainee | B.Tech / B.E (CSE, IT, AI&DS), Strong SQL, Python, Excel & Tableau | ₹4.2 - ₹5.0 LPA | Cognizant, KCT Tech Park, Saravanampatti, Coimbatore - 641049 | https://www.google.com/maps/search/?api=1&query=Cognizant+KCT+Tech+Park+Saravanampatti+Coimbatore | 09:00 AM IST | https://careers.cognizant.com/global/en |"""
 
-### Bangalore
+    bangalore_table = f"""### Bangalore
 | Company | Date | Role | Eligibility | Salary | Venue | Google Maps link | Reporting time | Source link |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Infosys BPM | {today_str} | Technical Process Executive - Data Analytics | Any Graduate / B.Tech (2024/2025), Good analytical & communication skills | ₹3.5 - ₹4.2 LPA | Infosys BPM, Gate 4, Electronics City Phase 1, Hosur Road, Bangalore - 560100 | https://maps.google.com/?q=Infosys+Gate+4+Electronic+City+Bangalore | 10:00 AM IST | https://www.infosys.com/careers |
+| Infosys BPM | {day2_str} (in 2 days) | IT Support / Systems Engineer Trainee | B.Tech / BCA / B.Sc (2024/2025), Windows Server, Networking, Cloud fundamentals | ₹3.5 - ₹4.5 LPA | Infosys BPM, Gate 4, Electronics City Phase 1, Hosur Road, Bangalore - 560100 | https://www.google.com/maps/search/?api=1&query=Infosys+BPM+Gate+4+Electronic+City+Bangalore | 10:00 AM IST | https://career.infosys.com/ |
+| Tech Mahindra | {day4_str} (in 4 days) | Full Stack / MERN Developer Trainee | B.Tech (CSE, IT, AI&DS), MongoDB, Express, React, Node.js or Java Spring | ₹4.5 - ₹5.5 LPA | Tech Mahindra, Plot 45-47, KIADB Industrial Area, Electronic City Phase 2, Bangalore - 560100 | https://www.google.com/maps/search/?api=1&query=Tech+Mahindra+Electronic+City+Phase+2+Bangalore | 09:30 AM IST | https://careers.techmahindra.com/ |
+| Wipro Limited | {day5_str} (in 5 days) | Junior Java Developer / Software Engineer | B.E / B.Tech (CSE, IT, AI&DS, ECE), Core Java, OOPS, Spring Boot basics | ₹4.5 - ₹6.0 LPA | Wipro Limited, Doddakannelli, Sarjapur Road, Bangalore - 560035 | https://www.google.com/maps/search/?api=1&query=Wipro+Limited+Doddakannelli+Sarjapur+Road+Bangalore | 09:00 AM IST | https://careers.wipro.com/careers-home/jobs |"""
 
----
-
-## Online Assessments / Online Interviews
+    online_table = f"""## Online Assessments / Online Interviews
 | Company | Role | Eligibility | Platform | Last date to apply | Test/Interview date & time | Test pattern | Salary | Registration link | Source link |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Tata Consultancy Services (TCS) | TCS NQT 2025/2026 - Digital & Prime (AI/GenAI Stream) | B.Tech (AI&DS, CS, IT) 2025/2026, 60%+ throughout | TCS iON Proctored Portal | {today_str} 11:59 PM | {day2_str}, 10:00 AM IST | Quantitative Aptitude, Logical Reasoning, Advanced Coding (Python/C++/Java) | ₹7.0 - ₹9.0 LPA | https://learning.tcsionhub.in/hub/national-qualifier-test/ | https://www.tcs.com/careers |
-| Wipro Limited | Project Engineer - Elite AI & Cloud Drive | B.E / B.Tech / MCA (2024-2026), Min 60% or 6.0 CGPA | AMCAT / Mettl Virtual Platform | {day1_str} 06:00 PM | {day2_str}, 02:00 PM IST | Online Aptitude + 2 Coding Problems + English Communication Test | ₹4.0 - ₹6.5 LPA | https://careers.wipro.com/global-campus-hiring | https://careers.wipro.com |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Tata Consultancy Services (TCS) | TCS NQT 2025/2026 - Digital & Prime (AI/ML & Software Engineer Track) | B.Tech (CSE, IT, AI&DS, ECE) 2025/2026, 60%+ throughout | TCS iON Proctored Portal | {day2_str} 11:59 PM | {day4_str}, 10:00 AM IST | Quantitative Aptitude, Logical Reasoning, Advanced Coding (Python/Java/C++) | ₹7.0 - ₹9.0 LPA | https://www.tcsion.com/hub/national-qualifier-test/ | https://www.tcs.com/careers |
+| Wipro Limited | Project Engineer - Elite Drive (Java & Full Stack Cloud Track) | B.E / B.Tech / MCA (2024-2026), Min 60% or 6.0 CGPA | AMCAT / Mettl Virtual Platform | {day3_str} 06:00 PM | {day5_str}, 02:00 PM IST | Online Aptitude + 2 Coding Problems + English Communication Test | ₹4.0 - ₹6.5 LPA | https://careers.wipro.com/careers-home/jobs | https://careers.wipro.com |
+| Accenture India | Associate Software Engineer & QA Testing Virtual Hiring | B.E / B.Tech (All Tech Branches), 0-1 Year Experience | HireVue / HackerRank Virtual Platform | {day2_str} 11:59 PM | {day4_str}, 11:00 AM IST | Cognitive Assessment + Technical MCQs (Cloud, OOPS) + Coding | ₹4.6 - ₹5.4 LPA | https://www.accenture.com/in-en/careers/jobsearch?jk=Associate%20Software%20Engineer | https://www.accenture.com/in-en/careers |
+| Capgemini | Exceller Drive - Data Engineer & Web Development Track | B.Tech / MCA (2024/2025/2026), 60% throughout | CoCubes Assessment Engine | {day1_str} 09:00 PM | {day3_str}, 03:00 PM IST | Technical MCQs (Data Structures, SQL) + Hands-on Coding Challenge | ₹4.25 - ₹5.75 LPA | https://www.capgemini.com/in-en/careers/job-search/ | https://www.capgemini.com/in-en/careers/ |"""
 
----
+    priority_section = f"""## Priority List
+1. **TCS NQT (Digital / Prime - AI & Software Track)**: High-tier CTC (up to ₹9.0 LPA) matching IT & CSE specialization. Direct registration live at TCS iON!
+2. **Cognizant Technology Solutions (Chennai Java/Full Stack Walk-in - {day2_str})**: Confirmed in-person walk-in drive scheduled in 2 days at OMR Sholinganallur. Immediate spot interview evaluation.
+3. **Bosch Global Software Technologies (Coimbatore AI/ML & Embedded - {day3_str})**: Top brand for Core AI/ML and software engineering, located conveniently in Coimbatore."""
 
-## Priority List
-1. **TCS NQT (Digital / Prime - AI Track)**: Top-tier CTC (up to ₹9.0 LPA) matching B.Tech AI & Data Science specialization. The application portal closes strictly today!
-2. **Cognizant Technology Solutions (Chennai Walk-in)**: Confirmed in-person walk-in drive tomorrow morning at OMR Sholinganallur. Immediate spot interview evaluation.
-3. **Bosch Global Software Technologies (Coimbatore)**: Excellent technical brand for core AI/ML + software engineering, conveniently located in Coimbatore.
-"""
+    if kind == 'online':
+        return f'{online_table}\n\n---\n\n{priority_section}'
 
-    # If filtered by kind or city, return relevant sections
-    if kind == "walkin":
-        mock_text = mock_text.split("## Online Assessments")[0]
-    elif kind == "online":
-        parts = mock_text.split("## Online Assessments")
-        mock_text = "## Online Assessments" + parts[1] if len(parts) > 1 else mock_text
-
+    walkin_parts = []
     if city:
         city_lower = city.lower()
-        if city_lower in ["chennai", "coimbatore", "bangalore"]:
-            logger.info(f"Filtering mock data for city: {city}")
+        if city_lower == 'chennai':
+            walkin_parts.append(chennai_table)
+        elif city_lower == 'coimbatore':
+            walkin_parts.append(coimbatore_table)
+        elif city_lower == 'bangalore':
+            walkin_parts.append(bangalore_table)
+        else:
+            walkin_parts.extend([chennai_table, coimbatore_table, bangalore_table])
+    else:
+        walkin_parts.extend([chennai_table, coimbatore_table, bangalore_table])
 
-    return mock_text
+    walkin_section = '## Walk-in Interviews\n\n' + '\n\n'.join(walkin_parts)
+
+    if kind == 'walkin' or city is not None:
+        return f'{walkin_section}\n\n---\n\n{priority_section}'
+
+    # Default / Daily Digest: Return all 13 opportunities (9 walk-ins + 4 online assessments)
+    return f'{walkin_section}\n\n---\n\n{online_table}\n\n---\n\n{priority_section}'
 
 
 def search_jobs(
@@ -149,8 +214,11 @@ def search_jobs(
     today_str, day1_str, day2_str = get_ist_dates()
     api_key = os.getenv("ANTHROPIC_API_KEY")
 
-    if dry_run or not api_key or api_key.startswith("your_") or api_key == "test_key":
-        logger.info(f"Running in dry-run/offline mode (dry_run={dry_run}, key_present={bool(api_key)})")
+    if dry_run or not has_anthropic_key():
+        if not dry_run:
+            logger.info("ANTHROPIC_API_KEY is not configured in .env. Serving sample/demo job listings.")
+        else:
+            logger.info("Running in dry-run mode (SAMPLE DATA, not real jobs)")
         return get_mock_results(city=city, kind=kind, query=query)
 
     # Formulate user prompt based on filters
@@ -164,9 +232,9 @@ def search_jobs(
 
     if query:
         user_prompt = (
-            f"Search for live job opportunities matching: '{query}'.\n"
+            f"Search directly across all official company career websites (Zoho, Cognizant, TCS, Infosys, Wipro, HCLTech, Bosch, Tech Mahindra, Accenture, Capgemini) and verified portals for live opportunities matching: '{query}'.\n"
             f"Target candidate: final-year B.Tech AI & Data Science fresher.\n"
-            f"Target dates: today ({today_str}) and the next 2 days ({day1_str}, {day2_str}).\n"
+            f"Target dates: today and the next 5 days ({today_str} onwards, advance travel window).\n"
             f"Strictly format according to the system prompt sections with verified venues/links."
         )
     else:
@@ -193,25 +261,13 @@ def search_jobs(
         model_name = "claude-sonnet-5-5"
 
         for turn_idx in range(max_turns):
-            try:
-                response = client.messages.create(
-                    model=model_name,
-                    max_tokens=4096,
-                    system=system_prompt,
-                    messages=messages,
-                    tools=tools
-                )
-            except anthropic.NotFoundError:
-                # If claude-sonnet-5-5 is aliased or not yet enabled on the key, fallback to claude-3-7-sonnet-20250219
-                logger.warning(f"Model '{model_name}' not found; falling back to 'claude-3-7-sonnet-20250219'")
-                model_name = "claude-3-7-sonnet-20250219"
-                response = client.messages.create(
-                    model=model_name,
-                    max_tokens=4096,
-                    system=system_prompt,
-                    messages=messages,
-                    tools=tools
-                )
+            response = client.messages.create(
+                model=model_name,
+                max_tokens=8000,
+                system=system_prompt,
+                messages=messages,
+                tools=tools
+            )
 
             # If pause_turn occurs, continue the loop per Anthropic server tool protocol
             if response.stop_reason == "pause_turn":
@@ -231,9 +287,9 @@ def search_jobs(
 
     except Exception as e:
         logger.error(f"Error querying Anthropic Claude API: {e}", exc_info=False)
-        logger.warning("Falling back to local curated opportunity records.")
+        raise  # never send fake jobs; the caller shows a friendly error
 
-    return get_mock_results(city=city, kind=kind, query=query)
+    raise RuntimeError("Claude returned no text. Please try again.")
 
 
 def parse_markdown_table_row(row_str: str) -> List[str]:
@@ -268,7 +324,11 @@ def format_for_telegram(raw_markdown: str) -> str:
             continue
 
         # Check for section headers (only if not in priority section, or if markdown heading)
-        is_heading = line_clean.startswith(("#", "=="))
+        is_heading = (
+            line_clean.startswith(("#", "=="))
+            or bool(re.match(r"(?i)^\**\s*section\s*\d", line_clean))
+            or (line_clean.startswith("**") and line_clean.endswith("**") and len(line_clean) < 90)
+        )
         if is_heading and "walk-in" in line_clean.lower():
             current_section = "walkin"
             in_priority = False
@@ -288,7 +348,7 @@ def format_for_telegram(raw_markdown: str) -> str:
         # Check for city subheadings
         if current_section == "walkin":
             for c in ["chennai", "coimbatore", "bangalore"]:
-                if c in line_clean.lower() and line_clean.startswith("#"):
+                if c in line_clean.lower() and is_heading:
                     current_city = c.capitalize()
                     output_blocks.append(f"\n📍 *Location: {current_city}*")
                     break

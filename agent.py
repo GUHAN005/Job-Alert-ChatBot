@@ -52,9 +52,10 @@ def run_daily_digest(dry_run: bool = False) -> None:
 
         # Format into clean Telegram card-style message
         formatted_message = (
-            f"🚀 *DAILY JOB DIGEST (AI & DATA SCIENCE / TECH FRESHERS)*\n"
-            f"📅 *Date:* {today_str} (Today & Next 2 Days)\n"
-            f"📍 *Locations:* Chennai, Coimbatore, Bangalore\n\n"
+            f"🚀 *DAILY JOB DIGEST (IT & CSE CLUSTER FRESHERS)*\n"
+            f"📅 *Date Window:* {today_str} (Upcoming 5 Days — Advance Notice to Reach Directly)\n"
+            f"📍 *Locations:* Chennai, Coimbatore, Bangalore\n"
+            f"🎯 *Target Roles:* Software Dev, Java, MERN/Full Stack, Web, AI/ML, Data, QA, IT Support\n\n"
             + format_for_telegram(raw_result)
         )
 
